@@ -1,0 +1,192 @@
+% Compute the equilibrium solution
+
+function result = equilibrium
+%% Driver
+
+lowLim=0;
+upperLim=2;
+numOfSteps=100;
+xrange=linspace(lowLim, upperLim, numOfSteps);
+yrange=linspace(lowLim, upperLim, numOfSteps);
+global xx;
+global yy;
+[xx, yy]=meshgrid(xrange,yrange);
+xx=reshape(xx, 1, numOfSteps^2);
+yy=reshape(yy, 1, numOfSteps^2);
+
+%P = 10000;   % number of locations
+numOfGCells=500;
+numOfPlaceCells=50;
+global I;
+
+I=20*getInput(numOfGCells, xx, yy, numOfSteps, numOfPlaceCells);
+
+result=solution(numOfPlaceCells, I);
+% result=backEul(numOfPlaceCells, I, numOfSteps^2);
+result=15*rec(result);
+
+%numOfFields=findDataFor(result);
+
+t=equilibrium;
+tt=reshape(t(3,:),100,100);
+imagesc(linspace(0,2,100),linspace(0,2,100),tt);...
+colorbar; colormap hot; colormap(flipud(colormap));
+
+% return  % MAIN FUNCTION
+end
+
+function u2 = solution(numOfP, Mtx)
+%% Parameters
+
+fpk=15;
+Isum = sum(Mtx);
+fthr = 0.0075; 
+feff = 5.31;  % bigger value leads to smaller states
+
+g = @(Isum,Nact) (Isum-fthr/fpk) ./ (1/(feff*fpk) + Nact);
+
+
+%% Find equilibrium solution through algorithm
+
+% CASE 1: first assume all locs are case 1, then replace case 2 locs
+u2 = Mtx;
+
+% CASE 2
+ind2 = find(Isum > fthr/fpk); %find the number of values
+% in Isum bigger than fthr/fpk.
+P2 = length(ind2); % assign the number of elements
+% in that array to P2
+
+[SI2,perm] = sort(Mtx(:,ind2),'descend');  % descending order along each column, I(perm(:,i),i) = SI
+
+c = cumsum(SI2); % c(k,i) = net input into largest k cells at loc i
+kk = repmat((1:numOfP)',1,P2);
+uk = SI2 - g(c,kk);
+Nact = sum(uk>0);  % Nact(i) = number of active cells at loc i
+
+ind = numOfP*((1:P2)-1) + Nact; % indeces for Nact at each location
+state = SI2 - repmat(g(c(ind),Nact),numOfP,1); % numOfPlaceCells x P2
+
+if any(c(ind)<fthr/fpk), disp('No fixed point exists'); u2 = NaN*ones(numOfPlaceCells,P);
+else
+    rows = reshape(perm,P2*numOfP,1);
+    cols = repmat(ind2,numOfP,1); cols = reshape(cols,P2*numOfP,1);
+    ind = numOfP*(cols-1) + rows;
+    
+    u2(ind) = reshape(state,numOfP*P2,1);
+end
+
+end
+
+function input = getInput(numOfG, X, Y, P, numOfPlc)
+C=0.4;
+vert = @(x) [cos(x), sin(x)];
+
+%% Grid Cells
+% Params: psi = tilt/orientation, 0-pi/3
+% phi = offset (x,y), 0-1
+% s = spacing, 0.3-0.9
+
+psi=rand(numOfG,1)*pi/3;
+% tilt, numOfGCellsx1
+phi=rand(numOfG,2);
+% offset, numOfGCellsx2
+theta=[-pi/3 0 pi/3];
+s=rand(numOfG,1)*0.6+0.3;
+% spacing, numOfGCellsx1
+cons=4*pi./(s*sqrt(3));
+
+G = zeros(numOfG,P^2);
+for i=1:numOfG
+    offvec=[X-phi(i,1); Y-phi(i,2)];
+    for t=theta
+        v=vert(t-psi);
+        G(i,:) = G(i,:) +...
+            cos((cons(i,:)*v(i,:))*offvec);
+    end
+end
+
+G=(1/3)*G;
+
+%% Weight Matrix
+
+weightMtx=sprand(numOfPlc,numOfG,0.5);
+% 0.5 gives us about 40 percent sparsity
+
+inputInt=weightMtx*G;
+input=(2/(3*numOfG*C))*...
+    inputInt+(1/3);
+
+
+% input=reshape(input, 100, 100);
+% imagesc(xrange,yrange,input) also surf, mesh
+% colorbar
+% axis image
+end
+
+function u = backEul(numOfPlc, Mtx, numOfPos)
+%% Backward Euler
+
+tau=10;
+dt = .1;  % timestep (ms)
+Tfin = 400;
+tol = 1e-8;
+fpk=15;
+fthr = 0.0075; 
+feff = 5.31;  % bigger value leads to smaller states
+u = zeros(numOfPlc, numOfPos);  % initial state, all cells, all locs
+
+Z = zeros(numOfPlc,ceil(Tfin/dt));
+% for p=1:numOfPos
+%     U{p} = Z;  % store states of all cells, loc p, for plotting
+%     U{p}(:,p) = u(:,p); ct=1;
+% end
+
+t = 0;
+c = tau/dt;
+c1 = c/(c+1); c2 = 1/(c+1);
+
+err = 1;
+
+while t<Tfin % && err>tol
+    uold = u;
+    t=t+dt;
+    
+    finh = repmat(rec(fpk*sum(rec(u))-fthr),...
+        numOfPlc,1);
+    u = u*c1 + c2*(Mtx - feff*finh);
+    
+%     ct=ct+1;
+%     for p=1:numOfPos
+%         U{p}(:,ct) = u(:,p);
+%     end
+    
+%     err = norm(u-uold) / norm(uold);
+end
+
+end
+
+%% Positive rectifier
+function y=rec(x)
+y = .5*(x+abs(x));
+return
+end
+
+%% Looking for fields
+function fieldData=findDataFor(plcMtx)
+
+plcMtx=transpose(plcMtx);
+fieldData=0;
+for i=1:numel(plcMtx)-4
+    a=plcMtx(i:i+4);
+    if all(a>0.3)
+        fieldData=fieldData+1;
+    end
+end
+
+end
+
+%t=equilibrium;
+%tt=reshape(t(3,:),100,100);
+%imagesc(linspace(0,2,100),linspace(0,2,100),tt);...
+%colorbar; colormap hot; colormap(flipud(colormap));
